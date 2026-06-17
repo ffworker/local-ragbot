@@ -1,48 +1,17 @@
-# Local RAG Bot
-
-Tiny local-first RAG chatbot for answering questions only from local files.
-
-The first version is intentionally small:
-
-- no cloud API required
-- no web search
-- no external Python dependencies
-- optional Ollama generation if available
-- extractive fallback when no local LLM is running
-
 ## Quick Start
 
-```bash
-python3 -m local_ragbot ingest data --dataset default --index-dir indexes
-python3 -m local_ragbot ask "What is this bot allowed to answer?" --dataset default --index-dir indexes
-python3 -m local_ragbot serve --index-dir indexes --host 127.0.0.1 --port 8088
-```
+Local RAG Bot is a local-first agentic RAG assistant.
 
-Add Markdown, text, or JSON files to `data/<dataset>/`, then run `ingest` again.
+It can:
 
-Dataset mode keeps domains separated:
-
-```bash
-python3 -m local_ragbot ingest data --dataset coach-potato --index-dir indexes
-python3 -m local_ragbot ask "How is my training going?" --dataset coach-potato --index-dir indexes
-curl -X POST http://127.0.0.1:8088/ask \
-  -H 'Content-Type: application/json' \
-  -d '{"dataset":"coach-potato","question":"How is my training going?"}'
-```
-
-## Local LLM / Ollama Setup
-
-Local RAG Bot can run in two modes:
-
-1. **Extractive fallback mode**
-   No LLM required. The bot searches your local indexed files and returns the most relevant excerpts.
-
-2. **Ollama mode**
-   Uses a local Ollama model to generate a cleaner answer from the retrieved local context.
-
-Without Ollama, the bot is not a full “smart” chatbot. It is a local retrieval tool that finds matching snippets. With Ollama, it becomes a small local RAG assistant.
-
-### Requirements
+* ingest local Markdown, text, and JSON files
+* keep knowledge separated by dataset
+* route questions to configured agents
+* answer with Ollama when available
+* fall back to extractive local excerpts
+* track runtime/job state
+* format answers for humans
+* run a source-grounding check when configured
 
 ```bash
 python --version
@@ -50,67 +19,161 @@ python --version
 
 Python **3.11+** is required.
 
-### Install Ollama
-
-Official Ollama documentation:
-
-* https://ollama.com/download
-* https://github.com/ollama/ollama
-
-Linux/macOS:
+Create or update the default dataset:
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-Windows PowerShell:
-
-```powershell
-irm https://ollama.com/install.ps1 | iex
-```
-
-After installation, verify that Ollama works:
-
-```bash
-ollama --version
-ollama list
-```
-
-### Pull a small local model
-
-For a lightweight first test:
-
-```bash
-ollama pull llama3.2:1b
-```
-
-You can also test the model directly:
-
-```bash
-ollama run llama3.2:1b
-```
-
-### Use Local RAG Bot without Ollama
-
-This returns local excerpts only:
-
-```bash
+mkdir -p data/default
 python -m local_ragbot ingest data --dataset default --index-dir indexes
-python -m local_ragbot ask "What is this bot allowed to answer?" --dataset default --index-dir indexes
 ```
 
-### Use Local RAG Bot with Ollama
+Ask a question:
 
-This retrieves local context first, then asks Ollama to generate the final answer:
+```bash
+python -m local_ragbot ask "What is this bot allowed to answer?" \
+  --dataset default \
+  --index-dir indexes
+```
+
+Debug the full pipeline:
 
 ```bash
 python -m local_ragbot ask "What is this bot allowed to answer?" \
   --dataset default \
   --index-dir indexes \
-  --model llama3.2:1b
+  --json
 ```
 
-To see which mode was used:
+Start the local web/API server:
+
+```bash
+python -m local_ragbot serve --index-dir indexes --host 127.0.0.1 --port 8088
+```
+
+Open:
+
+```text
+http://127.0.0.1:8088
+```
+
+---
+
+## Agent Runtime
+
+Agents are configured in:
+
+```text
+config/agents.toml
+```
+
+List configured agents:
+
+```bash
+python -m local_ragbot agents
+python -m local_ragbot agents --json
+```
+
+List runtime state:
+
+```bash
+python -m local_ragbot runtime
+python -m local_ragbot runtime --json
+```
+
+The runtime tracks whether an agent is:
+
+```text
+idle
+busy
+disabled
+error
+```
+
+It also records job counts, last use, model name, and availability state.
+
+---
+
+## Datasets
+
+Datasets keep domains separated.
+
+Example folders:
+
+```text
+data/default
+data/coach-potato
+data/devops
+data/homelab
+```
+
+Ingest a dataset:
+
+```bash
+python -m local_ragbot ingest data --dataset devops --index-dir indexes
+```
+
+Ask a dataset directly:
+
+```bash
+python -m local_ragbot ask "How do I use Docker Compose here?" \
+  --dataset devops \
+  --index-dir indexes
+```
+
+Ask with an explicit agent:
+
+```bash
+python -m local_ragbot ask "How do I use Docker Compose here?" \
+  --agent devops_agent \
+  --dataset devops \
+  --index-dir indexes \
+  --json
+```
+
+Ask with auto-routing:
+
+```bash
+python -m local_ragbot ask "How do I use Docker Compose here?" \
+  --index-dir indexes \
+  --json
+```
+
+Routing order:
+
+```text
+1. Explicit --agent
+2. Explicit --dataset
+3. route_keywords from config/agents.toml
+4. defaults.default_agent
+```
+
+---
+
+## Local LLM / Ollama Setup
+
+The bot works without Ollama, but answers are extractive.
+
+With Ollama, the selected agent generates a cleaner answer from retrieved local context.
+
+Install Ollama:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Pull a small test model:
+
+```bash
+ollama pull llama3.2:1b
+```
+
+Verify:
+
+```bash
+ollama list
+curl http://127.0.0.1:11434/api/tags
+```
+
+Use an explicit model override:
 
 ```bash
 python -m local_ragbot ask "What is this bot allowed to answer?" \
@@ -120,48 +183,119 @@ python -m local_ragbot ask "What is this bot allowed to answer?" \
   --json
 ```
 
-Look for:
-
-```json
-"mode": "ollama"
-```
-
-If you see:
-
-```json
-"mode": "extractive"
-```
-
-then Ollama was not used and the bot returned local excerpts instead.
-
-### Serve with Ollama enabled
-
-Start the web/API server with a model:
+Force extractive mode:
 
 ```bash
-python -m local_ragbot serve --index-dir indexes --host 127.0.0.1 --port 8088 --model llama3.2:1b
+python -m local_ragbot ask "What is this bot allowed to answer?" \
+  --dataset default \
+  --index-dir indexes \
+  --model "" \
+  --json
 ```
 
-Then open:
+---
+
+## HTTP API
+
+Start server:
+
+```bash
+python -m local_ragbot serve --index-dir indexes --host 127.0.0.1 --port 8088
+```
+
+Endpoints:
 
 ```text
-http://127.0.0.1:8088
+GET  /health
+GET  /datasets
+GET  /agents
+GET  /runtime
+POST /ask
 ```
 
-Or ask via API:
+Ask via API:
 
 ```bash
-curl -X POST http://127.0.0.1:8088/ask \
+curl -s -X POST http://127.0.0.1:8088/ask \
   -H "Content-Type: application/json" \
-  -d '{"dataset":"default","question":"What is this bot allowed to answer?"}'
+  -d '{"agent":"local_answerer","dataset":"default","question":"What is this bot allowed to answer?"}' \
+  | python -m json.tool
 ```
 
-### Important
+---
 
-The bot is designed to answer only from indexed local files. If the local documents do not contain enough matching context, it should refuse or return only the closest local excerpts instead of guessing.
+## Response Shape
 
-Without Ollama, it returns the most relevant local excerpts.
+A normal `--json` response includes:
+
+```json
+{
+  "answer": "Markdown-formatted human answer",
+  "raw_answer": "Raw model or extractive answer before final formatting",
+  "display": {
+    "format": "markdown",
+    "title": "Answer",
+    "kind": "generated"
+  },
+  "sources": [
+    {
+      "dataset": "default",
+      "source": "notes.md",
+      "score": 0.42
+    }
+  ],
+  "source_check": {
+    "status": "checked",
+    "grounded": true,
+    "confidence": "high",
+    "issues": [],
+    "checked_by": "source_checker"
+  },
+  "mode": "ollama",
+  "agent": "local_answerer",
+  "agent_name": "Local Answerer",
+  "datasets": ["default"],
+  "missing_datasets": [],
+  "pipeline": ["router", "runtime", "local_answerer", "source_checker", "final_formatter"],
+  "job": {
+    "id": "uuid",
+    "agent": "local_answerer",
+    "started_at": "timestamp"
+  },
+  "runtime": {
+    "agent": "local_answerer",
+    "state": "idle",
+    "active_jobs": 0,
+    "max_concurrent_jobs": 1
+  }
+}
+```
+
+Common `mode` values:
+
+```text
+ollama
+extractive
+refusal
+missing_dataset
+agent_unavailable
+error
+```
+
+Common `source_check.status` values:
+
+```text
+checked
+skipped
+not_needed
+```
+
+---
 
 ## Guardrail
 
-The assistant is RAG-only. If retrieval finds weak or no context, it refuses instead of guessing.
+The assistant is RAG-only.
+
+It should answer only from indexed local files. If retrieval finds weak or no context, it should refuse or return local excerpts instead of guessing.
+
+The source checker is a verification pass. It checks whether the answer is grounded in retrieved local context. It does not rewrite answers.
