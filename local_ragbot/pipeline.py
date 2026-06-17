@@ -8,7 +8,6 @@ from .llm import ollama_generate
 from .retrieval import IndexedChunk, retrieve
 from .router import route_agent
 from .runtime import AgentUnavailable, get_runtime
-from .runtime import AgentUnavailable, get_runtime
 from .source_checker import check_answer_grounding
 from .formatter import (
     format_extractive_answer,
