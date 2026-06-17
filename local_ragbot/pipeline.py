@@ -203,7 +203,12 @@ def answer_with_agent(
         explicit_agent=explicit_agent,
         explicit_dataset=dataset,
     )
-
+    
+    checker_agent = None
+    checker_id = config.defaults.get("source_checker")
+    if checker_id:
+        checker_agent = config.get(checker_id)
+        
     runtime = get_runtime(config)
 
     try:
@@ -214,6 +219,7 @@ def answer_with_agent(
                 index_dir=index_dir,
                 dataset=dataset,
                 model_override=model_override,
+                checker_agent=checker_agent,
             )
 
         result["job"] = job.to_dict()
