@@ -11,27 +11,36 @@ If the context does not contain the answer, say that the local documents do not 
 Keep the answer concise and cite source names from the context."""
 
 
-def ollama_generate(prompt: str, model: str, host: str = "http://127.0.0.1:11434") -> str | None:
+def ollama_generate(
+    prompt: str,
+    model: str,
+    host: str = "http://127.0.0.1:11434",
+    system_prompt: str | None = None,
+    temperature: float = 0.1,
+    num_ctx: int = 2048,
+) -> str | None:
     payload = {
         "model": model,
         "stream": False,
         "prompt": prompt,
-        "system": SYSTEM_PROMPT,
+        "system": system_prompt or SYSTEM_PROMPT,
         "options": {
-            "temperature": 0.1,
-            "num_ctx": 2048,
+            "temperature": temperature,
+            "num_ctx": num_ctx,
         },
     }
+
     request = urllib.request.Request(
         f"{host.rstrip('/')}/api/generate",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
         return None
-    return data.get("response")
 
+    return data.get("response")
