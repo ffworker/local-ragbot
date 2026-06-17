@@ -82,14 +82,6 @@ def main() -> None:
                     f"Runtime: {runtime['state']} "
                     f"jobs={runtime['active_jobs']}/{runtime['max_concurrent_jobs']}"
                 )
-
-            if result.get("sources"):
-                print("\nSources:")
-                for source in result["sources"]:
-                    dataset = source.get("dataset")
-                    prefix = f"{dataset}/" if dataset else ""
-                    print(f"- {prefix}{source['source']} ({source['score']})")
-
         return
 
     if args.command == "serve":
