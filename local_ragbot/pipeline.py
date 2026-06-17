@@ -8,6 +8,8 @@ from .llm import ollama_generate
 from .retrieval import IndexedChunk, retrieve
 from .router import route_agent
 from .runtime import AgentUnavailable, get_runtime
+from .runtime import AgentUnavailable, get_runtime
+from .source_checker import check_answer_grounding
 from .formatter import (
     format_extractive_answer,
     format_generated_answer,
@@ -60,6 +62,7 @@ def _execute_agent_answer(
     index_dir: Path,
     dataset: str | None,
     model_override: str | None,
+    checker_agent: Agent | None = None,
 ) -> dict:
     datasets = [dataset] if dataset else agent.datasets
     datasets = [item for item in datasets if item]
@@ -136,8 +139,22 @@ def _execute_agent_answer(
         raw_answer = _fallback_answer(usable)
         mode = "extractive"
 
-    if "source_checker" in agent.can_call:
-        pipeline.append("source_checker")
+    source_check = {
+        "status": "skipped",
+        "grounded": None,
+        "confidence": "unknown",
+        "issues": ["source checker was not called"],
+        "checked_by": None,
+    }
+
+    if checker_agent and checker_agent.id in agent.can_call:
+        pipeline.append(checker_agent.id)
+        source_check = check_answer_grounding(
+            checker_agent=checker_agent,
+            answer=raw_answer,
+            question=question,
+            usable=usable,
+        ).to_dict()
 
     pipeline.append("final_formatter")
 
@@ -165,6 +182,7 @@ def _execute_agent_answer(
         "datasets": datasets,
         "missing_datasets": missing_datasets,
         "pipeline": pipeline,
+        "source_check": source_check,
     }
     
 
