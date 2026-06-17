@@ -7,6 +7,7 @@ from .datasets import index_path_for_dataset, validate_dataset
 from .llm import ollama_generate
 from .retrieval import IndexedChunk, retrieve
 from .router import route_agent
+from .runtime import AgentUnavailable, get_runtime
 
 
 def _source_name(dataset: str, chunk: IndexedChunk) -> str:
@@ -39,24 +40,13 @@ def _fallback_answer(usable: list[tuple[str, IndexedChunk, float]]) -> str:
     return f"Ich habe dazu diese lokalen Stellen gefunden:\n\n{excerpts}"
 
 
-def answer_with_agent(
+def _execute_agent_answer(
+    agent: Agent,
     question: str,
     index_dir: Path,
-    config_path: Path = DEFAULT_AGENTS_CONFIG,
-    explicit_agent: str | None = None,
-    explicit_dataset: str | None = None,
-    model_override: str | None = None,
+    dataset: str | None,
+    model_override: str | None,
 ) -> dict:
-    config = load_agent_config(config_path)
-    dataset = validate_dataset(explicit_dataset) if explicit_dataset else None
-
-    agent = route_agent(
-        question=question,
-        config=config,
-        explicit_agent=explicit_agent,
-        explicit_dataset=dataset,
-    )
-
     datasets = [dataset] if dataset else agent.datasets
     datasets = [item for item in datasets if item]
 
@@ -81,7 +71,7 @@ def answer_with_agent(
     usable.sort(key=lambda item: item[2], reverse=True)
     usable = usable[: agent.max_chunks]
 
-    pipeline = ["router", agent.id]
+    pipeline = ["router", "runtime", agent.id]
 
     if not usable:
         return {
@@ -137,3 +127,52 @@ def answer_with_agent(
         "missing_datasets": missing_datasets,
         "pipeline": pipeline,
     }
+
+
+def answer_with_agent(
+    question: str,
+    index_dir: Path,
+    config_path: Path = DEFAULT_AGENTS_CONFIG,
+    explicit_agent: str | None = None,
+    explicit_dataset: str | None = None,
+    model_override: str | None = None,
+) -> dict:
+    config = load_agent_config(config_path)
+    dataset = validate_dataset(explicit_dataset) if explicit_dataset else None
+
+    agent = route_agent(
+        question=question,
+        config=config,
+        explicit_agent=explicit_agent,
+        explicit_dataset=dataset,
+    )
+
+    runtime = get_runtime(config)
+
+    try:
+        with runtime.run_agent(agent) as job:
+            result = _execute_agent_answer(
+                agent=agent,
+                question=question,
+                index_dir=index_dir,
+                dataset=dataset,
+                model_override=model_override,
+            )
+
+        result["job"] = job.to_dict()
+        result["runtime"] = runtime.get_state(agent.id)
+        return result
+
+    except AgentUnavailable as error:
+        return {
+            "answer": str(error),
+            "sources": [],
+            "mode": "agent_unavailable",
+            "agent": agent.id,
+            "agent_name": agent.display_name,
+            "datasets": [dataset] if dataset else agent.datasets,
+            "missing_datasets": [],
+            "pipeline": ["router", "runtime_denied", agent.id],
+            "job": None,
+            "runtime": runtime.get_state(agent.id),
+        }
