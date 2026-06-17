@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from .agents import DEFAULT_AGENTS_CONFIG, load_agent_config
 from .datasets import index_path_for_dataset, list_indexed_datasets, validate_dataset
 from .pipeline import answer_with_agent
+from .runtime import get_runtime
 
 
 class RagHandler(BaseHTTPRequestHandler):
@@ -43,6 +44,12 @@ class RagHandler(BaseHTTPRequestHandler):
                     ],
                 }
             )
+            return
+            
+        if self.path == "/runtime":
+            config = load_agent_config(self.agents_config)
+            runtime = get_runtime(config)
+            self._json(runtime.snapshot())
             return
 
         if self.path == "/":
