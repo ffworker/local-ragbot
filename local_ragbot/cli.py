@@ -1,3 +1,4 @@
+cat > local_ragbot/cli.py <<'PY'
 from __future__ import annotations
 
 import argparse
@@ -7,8 +8,8 @@ from pathlib import Path
 from .agents import DEFAULT_AGENTS_CONFIG, load_agent_config
 from .datasets import data_path_for_dataset, index_path_for_dataset, list_indexed_datasets
 from .pipeline import answer_with_agent
-from .qa import answer_question
 from .retrieval import build_index
+from .runtime import get_runtime
 from .server import serve
 
 
@@ -24,7 +25,6 @@ def main() -> None:
 
     ask = sub.add_parser("ask", help="Ask a question")
     ask.add_argument("question")
-    ask.add_argument("--index", type=Path, default=Path("indexes/default.json"))
     ask.add_argument("--dataset", default=None)
     ask.add_argument("--index-dir", type=Path, default=Path("indexes"))
     ask.add_argument("--model", default=None)
@@ -46,6 +46,10 @@ def main() -> None:
     agents.add_argument("--agents-config", type=Path, default=DEFAULT_AGENTS_CONFIG)
     agents.add_argument("--json", action="store_true")
 
+    runtime_cmd = sub.add_parser("runtime", help="Show agent runtime state")
+    runtime_cmd.add_argument("--agents-config", type=Path, default=DEFAULT_AGENTS_CONFIG)
+    runtime_cmd.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -56,19 +60,14 @@ def main() -> None:
         return
 
     if args.command == "ask":
-        # New agent pipeline path.
-        if args.agent or args.dataset:
-            result = answer_with_agent(
-                question=args.question,
-                index_dir=args.index_dir,
-                config_path=args.agents_config,
-                explicit_agent=args.agent,
-                explicit_dataset=args.dataset,
-                model_override=args.model,
-            )
-        else:
-            # Backward-compatible old path for direct index usage.
-            result = answer_question(args.question, args.index, model=args.model)
+        result = answer_with_agent(
+            question=args.question,
+            index_dir=args.index_dir,
+            config_path=args.agents_config,
+            explicit_agent=args.agent,
+            explicit_dataset=args.dataset,
+            model_override=args.model,
+        )
 
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -77,6 +76,13 @@ def main() -> None:
 
             if result.get("agent"):
                 print(f"\nAgent: {result['agent']} ({result.get('mode', 'unknown')})")
+
+            if result.get("runtime"):
+                runtime = result["runtime"]
+                print(
+                    f"Runtime: {runtime['state']} "
+                    f"jobs={runtime['active_jobs']}/{runtime['max_concurrent_jobs']}"
+                )
 
             if result.get("sources"):
                 print("\nSources:")
@@ -119,6 +125,11 @@ def main() -> None:
                                 "model": agent.model,
                                 "allowed_tools": agent.allowed_tools,
                                 "can_call": agent.can_call,
+                                "enabled": agent.enabled,
+                                "max_concurrent_jobs": agent.max_concurrent_jobs,
+                                "cooldown_seconds": agent.cooldown_seconds,
+                                "keep_warm": agent.keep_warm,
+                                "priority": agent.priority,
                             }
                             for agent in config.agents.values()
                         ],
@@ -129,10 +140,35 @@ def main() -> None:
             )
         else:
             for agent in config.agents.values():
-                print(f"{agent.id:20} {agent.display_name} - {agent.description}")
+                status = "enabled" if agent.enabled else "disabled"
+                print(
+                    f"{agent.id:20} {status:8} "
+                    f"jobs={agent.max_concurrent_jobs} "
+                    f"model={agent.model or 'none'} "
+                    f"- {agent.display_name}"
+                )
+
+        return
+
+    if args.command == "runtime":
+        config = load_agent_config(args.agents_config)
+        runtime = get_runtime(config)
+        snapshot = runtime.snapshot()
+
+        if args.json:
+            print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+        else:
+            for state in snapshot["agents"]:
+                print(
+                    f"{state['agent']:20} {state['state']:10} "
+                    f"model={state['model']} "
+                    f"jobs={state['active_jobs']}/{state['max_concurrent_jobs']} "
+                    f"last_used={state['last_used']}"
+                )
 
         return
 
 
 if __name__ == "__main__":
     main()
+PY
