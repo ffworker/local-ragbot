@@ -1,7 +1,3 @@
-# Instructions for LLMs Working on This Repository
-
-This repository is a small local-first RAG bot that is intentionally evolving into an agent orchestration runtime. Keep it simple, deterministic, and debuggable.
-
 ## Core Goal
 
 Build a local agent control plane:
@@ -9,38 +5,26 @@ Build a local agent control plane:
 ```text
 User / API / Voice
     ↓
-Orchestrator / Router
+Router
+    ↓
+Runtime availability check
     ↓
 Selected Agent Preset
     ↓
 Local Retrieval
     ↓
-Ollama / Extractive Fallback
+Ollama generation or extractive fallback
     ↓
-Grounded Answer
+Source checker
+    ↓
+Final formatter
+    ↓
+Grounded, readable answer
 ```
 
 Do not turn the project into a large framework too early. Prefer small files, plain Python, no unnecessary dependencies, and clear JSON output.
 
-## Current Design Principles
-
-1. **Agents are presets, not permanent personalities.**  
-   An agent is config: name, task, model, datasets, prompts, permissions, and route rules.
-
-2. **Workers are temporary.**  
-   A worker exists only while handling a request. Do not keep one Python process per agent.
-
-3. **Models are shared expensive resources.**  
-   Agents may use different models, but Ollama/model loading is the resource bottleneck.
-
-4. **The orchestrator owns control.**  
-   Agents do not freely call each other. Routing and handoff must be explicit.
-
-5. **RAG-only by default.**  
-   The bot must answer from indexed local files. If local context is missing or weak, it should refuse or return excerpts instead of guessing.
-
-6. **No hidden autonomy.**  
-   Agents may later propose changes, but they must not silently edit their own config, memory, or prompts.
+---
 
 ## Important Files and Responsibilities
 
@@ -56,59 +40,96 @@ config/agents.toml
     - route keywords
     - allowed tools
     - allowed handoff targets
+    - runtime limits
 
 local_ragbot/agents.py
     Loads and validates config/agents.toml.
 
 local_ragbot/router.py
-    Deterministically chooses the agent for a question.
+    Deterministically chooses the answering agent for a question.
+
+local_ragbot/runtime.py
+    Tracks runtime state:
+    - idle
+    - busy
+    - disabled
+    - error
+
+    Also tracks:
+    - active jobs
+    - max concurrent jobs
+    - total jobs
+    - failed jobs
+    - last used
+    - last error
+    - current job id
 
 local_ragbot/pipeline.py
     Executes one request:
-    - choose/load agent
+    - load config
+    - route to an agent
+    - check runtime availability
     - retrieve local chunks
     - call Ollama if configured
     - fall back to extractive snippets
-    - return answer, mode, sources, agent, pipeline trace
+    - call source checker if allowed
+    - call final formatter
+    - return answer, raw_answer, display, source_check, runtime, job, mode, sources, agent, datasets, and pipeline trace
+
+local_ragbot/source_checker.py
+    Verifies whether an answer is grounded in retrieved local context.
+    It returns a verdict object.
+    It must not rewrite the answer.
+
+local_ragbot/formatter.py
+    Formats raw answers into readable Markdown.
+    It returns:
+    - answer
+    - raw_answer
+    - display
 
 local_ragbot/retrieval.py
     Reads local files, chunks text, creates simple hashed vectors, retrieves matching chunks.
 
 local_ragbot/llm.py
-    Talks to Ollama. Keep this small and isolated.
+    Talks to Ollama.
+    Keep this small and isolated.
 
 local_ragbot/server.py
     HTTP API and simple browser UI.
+    Current important endpoints:
+    - GET /health
+    - GET /datasets
+    - GET /agents
+    - GET /runtime
+    - POST /ask
 
 local_ragbot/cli.py
     CLI entrypoint.
+    Current important commands:
+    - ingest
+    - ask
+    - serve
+    - datasets
+    - agents
+    - runtime
 ```
 
-## Architectural Boundaries
-
-### Allowed
-
-- Add small Python modules with focused responsibility.
-- Add tests or simple smoke commands.
-- Add CLI flags only when they are useful and clear.
-- Add JSON output for debugging.
-- Add runtime state, job limits, queues, and model warm/cold behavior gradually.
-
-### Avoid
-
-- Do not add LangChain, CrewAI, Celery, Redis, FastAPI, or databases unless explicitly requested.
-- Do not make agents autonomous by default.
-- Do not add background task loops before runtime state and resource limits exist.
-- Do not allow every agent to call every other agent.
-- Do not hide fallback behavior. Always expose `mode`, `agent`, `sources`, and `pipeline`.
+---
 
 ## Preferred JSON Response Shape
 
-Every request should aim to return:
+Every `ask --json` or `POST /ask` response should aim to include:
 
 ```json
 {
-  "answer": "...",
+  "answer": "Markdown-formatted human answer",
+  "raw_answer": "Raw model or extractive answer before final formatting",
+  "display": {
+    "format": "markdown",
+    "title": "Answer",
+    "kind": "generated"
+  },
   "sources": [
     {
       "dataset": "devops",
@@ -116,12 +137,40 @@ Every request should aim to return:
       "score": 0.42
     }
   ],
+  "source_check": {
+    "status": "checked",
+    "grounded": true,
+    "confidence": "high",
+    "issues": [],
+    "checked_by": "source_checker"
+  },
   "mode": "ollama",
   "agent": "devops_agent",
   "agent_name": "DevOps Agent",
   "datasets": ["devops", "homelab"],
   "missing_datasets": [],
-  "pipeline": ["router", "devops_agent", "source_checker", "final_formatter"]
+  "pipeline": ["router", "runtime", "devops_agent", "source_checker", "final_formatter"],
+  "job": {
+    "id": "uuid",
+    "agent": "devops_agent",
+    "started_at": "timestamp"
+  },
+  "runtime": {
+    "agent": "devops_agent",
+    "state": "idle",
+    "enabled": true,
+    "model": "llama3.2:1b",
+    "active_jobs": 0,
+    "max_concurrent_jobs": 1,
+    "total_jobs": 1,
+    "failed_jobs": 0,
+    "last_used": "timestamp",
+    "last_error": null,
+    "current_job_id": null,
+    "keep_warm": false,
+    "cooldown_seconds": 0,
+    "priority": 50
+  }
 }
 ```
 
@@ -132,138 +181,85 @@ ollama
 extractive
 refusal
 missing_dataset
+agent_unavailable
 error
 ```
 
-## Agent Routing Rules
-
-Prefer deterministic routing first:
+Valid `source_check.status` values should stay simple:
 
 ```text
-1. If explicit --agent is provided, use that agent.
-2. Else if explicit dataset is provided, pick an agent that owns that dataset.
-3. Else match question text against route_keywords.
-4. Else use defaults.default_agent.
+checked
+skipped
+not_needed
 ```
 
-Do not add an LLM-router until deterministic routing is reliable and easy to debug.
+Important rules:
 
-## Agent Handoff Rules
+* `answer` is for humans.
+* `raw_answer` is for debugging.
+* `display.format` should currently be `markdown`.
+* `source_check` reports grounding; it does not rewrite answers.
+* `pipeline` must reflect the actual executed stages.
+* `runtime` must describe agent availability after the request.
+* `job` must describe the temporary request execution.
 
-Agents may only call or hand off to IDs listed in `can_call`.
-
-Good:
-
-```text
-devops_agent -> source_checker -> final_formatter
-coach_agent  -> source_checker -> final_formatter
-```
-
-Bad:
-
-```text
-devops_agent <-> coach_agent <-> notes_agent <-> random loop
-```
-
-No loops unless there is a hard maximum step limit.
-
-## Future Runtime Direction
-
-The project should move toward:
-
-```text
-Agent = preset + permissions + memory scope
-Worker = temporary job execution
-Model = shared local inference resource
-Runtime = state, queue, limits, cooldown, warm/cold behavior
-Orchestrator = router + scheduler + policy enforcer
-```
-
-Future runtime states:
-
-```text
-idle
-busy
-cooling_down
-disabled
-error
-```
-
-Future runtime fields:
-
-```json
-{
-  "agent": "devops_agent",
-  "state": "idle",
-  "active_jobs": 0,
-  "max_concurrent_jobs": 1,
-  "last_used": "2026-06-17T12:30:00Z",
-  "model": "llama3.2:1b"
-}
-```
-
-## Voice / STT / TTS Guidance
-
-Do not put STT/TTS inside every agent.
-
-Voice should be an outer adapter:
-
-```text
-audio input
-    ↓
-STT adapter
-    ↓
-text question
-    ↓
-normal orchestrator / agent pipeline
-    ↓
-text answer
-    ↓
-TTS adapter
-    ↓
-audio output
-```
-
-Agents should remain text-first.
-
-## Implementation Style
-
-Use plain Python standard library where possible. The project currently aims to stay dependency-light.
-
-Prefer:
-
-```text
-dataclasses
-pathlib
-json
-tomllib
-http.server
-urllib
-```
-
-Avoid adding dependencies unless the user explicitly approves them.
+---
 
 ## Testing Expectations
 
-When changing routing, agents, or pipeline behavior, verify:
+When changing routing, agents, runtime, formatting, source checking, or pipeline behavior, verify:
 
 ```bash
 python -m local_ragbot agents
+python -m local_ragbot agents --json
+
+python -m local_ragbot runtime
+python -m local_ragbot runtime --json
+
 python -m local_ragbot datasets --index-dir indexes
-python -m local_ragbot ask "What is this bot allowed to answer?" --agent local_answerer --dataset default --index-dir indexes --json
-python -m local_ragbot ask "How do I use Docker Compose here?" --index-dir indexes --json
+
+python -m local_ragbot ask "What is this bot allowed to answer?" \
+  --agent local_answerer \
+  --dataset default \
+  --index-dir indexes \
+  --json
+
+python -m local_ragbot ask "How do I use Docker Compose here?" \
+  --index-dir indexes \
+  --json
+
+python -m local_ragbot ask "What is this bot allowed to answer?" \
+  --agent local_answerer \
+  --dataset default \
+  --index-dir indexes \
+  --model "" \
+  --json
+
 python -m local_ragbot serve --index-dir indexes --host 127.0.0.1 --port 8088
+```
+
+HTTP smoke tests:
+
+```bash
+curl -s http://127.0.0.1:8088/health | python -m json.tool
+curl -s http://127.0.0.1:8088/datasets | python -m json.tool
+curl -s http://127.0.0.1:8088/agents | python -m json.tool
+curl -s http://127.0.0.1:8088/runtime | python -m json.tool
+
+curl -s -X POST http://127.0.0.1:8088/ask \
+  -H "Content-Type: application/json" \
+  -d '{"agent":"local_answerer","dataset":"default","question":"What is this bot allowed to answer?"}' \
+  | python -m json.tool
 ```
 
 Expected behavior:
 
-- `agents` lists configured agents.
-- `ask --json` shows `agent`, `mode`, `sources`, and `pipeline`.
-- If Ollama is unavailable, mode falls back to `extractive`.
-- If context is missing, mode is `refusal` or `missing_dataset`.
-
-## North Star
-
-This project is not trying to become a cloud SaaS product. It is a local-first personal agent runtime.
-
-Build toward a tiny, understandable "LLM cluster" where agents can be configured, routed, limited, inspected, and eventually voice-enabled without losing control.
+* `agents` lists configured agents.
+* `runtime` lists runtime state.
+* `ask --json` shows `answer`, `raw_answer`, `display`, `agent`, `mode`, `sources`, `source_check`, `job`, `runtime`, and `pipeline`.
+* If Ollama is unavailable, mode falls back to `extractive`.
+* If context is missing, mode is `refusal` or `missing_dataset`.
+* If the agent is unavailable, mode is `agent_unavailable`.
+* The pipeline trace should include real stages only.
+* `source_checker` should appear only when configured and allowed by `can_call`.
+* `final_formatter` should appear when formatting actually ran.
