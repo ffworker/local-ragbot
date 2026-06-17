@@ -8,6 +8,12 @@ from .llm import ollama_generate
 from .retrieval import IndexedChunk, retrieve
 from .router import route_agent
 from .runtime import AgentUnavailable, get_runtime
+from .formatter import (
+    format_extractive_answer,
+    format_generated_answer,
+    format_refusal_answer,
+    format_unavailable_answer,
+)
 
 
 def _source_name(dataset: str, chunk: IndexedChunk) -> str:
@@ -82,15 +88,23 @@ def _execute_agent_answer(
     pipeline = ["router", "runtime", agent.id]
 
     if not usable:
+        raw_answer = "Dazu finde ich in den lokalen Daten nichts."
+        formatted = format_refusal_answer(
+            raw_answer,
+            agent_name=agent.display_name,
+            datasets=datasets,
+            missing_datasets=missing_datasets,
+        )
+
         return {
-            "answer": "Dazu finde ich in den lokalen Daten nichts.",
+            **formatted.to_dict(),
             "sources": [],
             "mode": "refusal",
             "agent": agent.id,
             "agent_name": agent.display_name,
             "datasets": datasets,
             "missing_datasets": missing_datasets,
-            "pipeline": pipeline,
+            "pipeline": pipeline + ["final_formatter"],
         }
 
     model = model_override if model_override is not None else agent.model
@@ -105,12 +119,21 @@ def _execute_agent_answer(
             system_prompt=agent.system_prompt,
             temperature=agent.temperature,
         )
+    
+    sources = [
+        {
+            "dataset": dataset_name,
+            "source": chunk.source,
+            "score": round(score, 3),
+        }
+        for dataset_name, chunk, score in usable
+    ]
 
     if generated:
-        answer = generated.strip()
+        raw_answer = generated.strip()
         mode = "ollama"
     else:
-        answer = _fallback_answer(usable)
+        raw_answer = _fallback_answer(usable)
         mode = "extractive"
 
     if "source_checker" in agent.can_call:
@@ -118,16 +141,24 @@ def _execute_agent_answer(
 
     pipeline.append("final_formatter")
 
+    if mode == "extractive":
+        formatted = format_extractive_answer(
+            raw_answer,
+            usable=usable,
+            sources=sources,
+            agent_name=agent.display_name,
+        )
+    else:
+        formatted = format_generated_answer(
+            raw_answer,
+            sources=sources,
+            agent_name=agent.display_name,
+            mode=mode,
+        )
+
     return {
-        "answer": answer,
-        "sources": [
-            {
-                "dataset": dataset_name,
-                "source": chunk.source,
-                "score": round(score, 3),
-            }
-            for dataset_name, chunk, score in usable
-        ],
+        **formatted.to_dict(),
+        "sources": sources,
         "mode": mode,
         "agent": agent.id,
         "agent_name": agent.display_name,
@@ -135,7 +166,7 @@ def _execute_agent_answer(
         "missing_datasets": missing_datasets,
         "pipeline": pipeline,
     }
-
+    
 
 def answer_with_agent(
     question: str,
@@ -172,15 +203,23 @@ def answer_with_agent(
         return result
 
     except AgentUnavailable as error:
-        return {
-            "answer": str(error),
-            "sources": [],
-            "mode": "agent_unavailable",
-            "agent": agent.id,
-            "agent_name": agent.display_name,
-            "datasets": [dataset] if dataset else agent.datasets,
-            "missing_datasets": [],
-            "pipeline": ["router", "runtime_denied", agent.id],
-            "job": None,
-            "runtime": runtime.get_state(agent.id),
-        }
+        runtime_state = runtime.get_state(agent.id)
+        raw_answer = str(error)
+        formatted = format_unavailable_answer(
+            raw_answer,
+            agent_name=agent.display_name,
+            runtime=runtime_state,
+        )
+
+    return {
+        **formatted.to_dict(),
+        "sources": [],
+        "mode": "agent_unavailable",
+        "agent": agent.id,
+        "agent_name": agent.display_name,
+        "datasets": [dataset] if dataset else agent.datasets,
+        "missing_datasets": [],
+        "pipeline": ["router", "runtime_denied", agent.id, "final_formatter"],
+        "job": None,
+        "runtime": runtime_state,
+    }
