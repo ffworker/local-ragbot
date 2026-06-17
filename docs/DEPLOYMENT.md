@@ -18,7 +18,8 @@ Rebuild the local index after changing files in `data/`:
 
 ```bash
 cd /root/local-ragbot
-python3 -m local_ragbot ingest data --index indexes/default.json
+python3 -m local_ragbot ingest data --dataset default --index-dir indexes
+python3 -m local_ragbot ingest data --dataset coach-potato --index-dir indexes
 systemctl --user restart local-ragbot.service
 ```
 
@@ -27,4 +28,3 @@ The service file lives at:
 ```text
 /root/.config/systemd/user/local-ragbot.service
 ```
-

@@ -13,12 +13,22 @@ The first version is intentionally small:
 ## Quick Start
 
 ```bash
-python3 -m local_ragbot ingest data --index indexes/default.json
-python3 -m local_ragbot ask "What is this bot allowed to answer?" --index indexes/default.json
-python3 -m local_ragbot serve --index indexes/default.json --host 127.0.0.1 --port 8088
+python3 -m local_ragbot ingest data --dataset default --index-dir indexes
+python3 -m local_ragbot ask "What is this bot allowed to answer?" --dataset default --index-dir indexes
+python3 -m local_ragbot serve --index-dir indexes --host 127.0.0.1 --port 8088
 ```
 
-Add Markdown, text, or JSON files to `data/`, then run `ingest` again.
+Add Markdown, text, or JSON files to `data/<dataset>/`, then run `ingest` again.
+
+Dataset mode keeps domains separated:
+
+```bash
+python3 -m local_ragbot ingest data --dataset coach-potato --index-dir indexes
+python3 -m local_ragbot ask "How is my training going?" --dataset coach-potato --index-dir indexes
+curl -X POST http://127.0.0.1:8088/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"dataset":"coach-potato","question":"How is my training going?"}'
+```
 
 ## Ollama
 
@@ -34,4 +44,3 @@ Without Ollama, it returns the most relevant local excerpts.
 ## Guardrail
 
 The assistant is RAG-only. If retrieval finds weak or no context, it refuses instead of guessing.
-
