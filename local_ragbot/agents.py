@@ -1,142 +1,97 @@
-[defaults]
-default_agent = "local_answerer"
-source_checker = "source_checker"
-final_formatter = "final_formatter"
+from __future__ import annotations
 
-[[agents]]
-id = "local_answerer"
-display_name = "Local Answerer"
-description = "Default RAG assistant for answering from local files."
-task = "Answer questions using only retrieved local context."
-model = "llama3.2:1b"
-datasets = ["default"]
-allowed_tools = ["retrieve", "generate"]
-can_call = ["source_checker"]
-fallback_agent = "extractive_answerer"
-max_chunks = 4
-min_score = 0.12
-temperature = 0.1
-output_style = "concise"
-
-system_prompt = """
-You are a local RAG assistant.
-Answer only from the provided local context.
-If the context does not contain the answer, say that the local documents do not contain it.
-Cite source names.
-"""
-
-route_keywords = ["default", "general", "notes", "docs"]
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 
-[[agents]]
-id = "coach_agent"
-display_name = "Coach Agent"
-description = "Fitness and Coach Potato project assistant."
-task = "Answer questions about training plans, exercises, Coach Potato app notes, and fitness logs."
-model = "llama3.2:1b"
-datasets = ["coach-potato"]
-allowed_tools = ["retrieve", "generate"]
-can_call = ["source_checker"]
-fallback_agent = "local_answerer"
-max_chunks = 6
-min_score = 0.10
-temperature = 0.2
-output_style = "practical"
-
-system_prompt = """
-You are a fitness/project assistant for Coach Potato.
-Use only the local Coach Potato dataset.
-Give practical, structured answers.
-Do not invent progress data that is not in the local files.
-"""
-
-route_keywords = ["coach", "training", "workout", "exercise", "pushup", "handstand", "calisthenics"]
+DEFAULT_AGENTS_CONFIG = Path("config/agents.toml")
 
 
-[[agents]]
-id = "devops_agent"
-display_name = "DevOps Agent"
-description = "DevOps, homelab, Kubernetes, Ansible, Docker, and CI/CD assistant."
-task = "Answer technical questions from local DevOps documentation."
-model = "llama3.2:1b"
-datasets = ["devops", "homelab"]
-allowed_tools = ["retrieve", "generate"]
-can_call = ["source_checker"]
-fallback_agent = "local_answerer"
-max_chunks = 8
-min_score = 0.10
-temperature = 0.1
-output_style = "step-by-step"
-
-system_prompt = """
-You are a local DevOps assistant.
-Use only retrieved local documentation.
-Prefer exact commands and short explanations.
-Do not assume cluster state unless it is in the local context.
-"""
-
-route_keywords = ["docker", "compose", "kubernetes", "k8s", "ansible", "terraform", "ci", "cd", "github", "ollama"]
+@dataclass(frozen=True)
+class Agent:
+    id: str
+    display_name: str
+    description: str
+    task: str
+    model: str
+    datasets: list[str]
+    allowed_tools: list[str]
+    can_call: list[str]
+    fallback_agent: str
+    max_chunks: int
+    min_score: float
+    temperature: float
+    output_style: str
+    system_prompt: str
+    route_keywords: list[str]
 
 
-[[agents]]
-id = "extractive_answerer"
-display_name = "Extractive Answerer"
-description = "Fallback mode without LLM generation."
-task = "Return the most relevant local excerpts."
-model = ""
-datasets = ["default"]
-allowed_tools = ["retrieve"]
-can_call = []
-fallback_agent = ""
-max_chunks = 4
-min_score = 0.12
-temperature = 0.0
-output_style = "excerpts"
+@dataclass(frozen=True)
+class AgentConfig:
+    defaults: dict[str, str]
+    agents: dict[str, Agent]
 
-system_prompt = ""
+    def get(self, agent_id: str) -> Agent:
+        try:
+            return self.agents[agent_id]
+        except KeyError as error:
+            known = ", ".join(sorted(self.agents))
+            raise ValueError(f"Unknown agent '{agent_id}'. Known agents: {known}") from error
 
-route_keywords = []
+    @property
+    def default_agent(self) -> Agent:
+        return self.get(self.defaults.get("default_agent", "local_answerer"))
 
 
-[[agents]]
-id = "source_checker"
-display_name = "Source Checker"
-description = "Checks whether the draft answer is grounded in the retrieved sources."
-task = "Verify that the answer only uses the provided local context."
-model = "llama3.2:1b"
-datasets = []
-allowed_tools = ["verify"]
-can_call = ["final_formatter"]
-fallback_agent = "final_formatter"
-max_chunks = 0
-min_score = 0.0
-temperature = 0.0
-output_style = "verdict"
-
-system_prompt = """
-You check whether an answer is grounded in the supplied local context.
-If unsupported claims exist, flag them.
-Prefer strictness over helpful guessing.
-"""
-
-route_keywords = []
+def _as_str_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"Expected list[str], got {type(value).__name__}")
+    return [str(item) for item in value]
 
 
-[[agents]]
-id = "final_formatter"
-display_name = "Final Formatter"
-description = "Formats the final answer for the user."
-task = "Make the final response readable and concise."
-model = ""
-datasets = []
-allowed_tools = ["format"]
-can_call = []
-fallback_agent = ""
-max_chunks = 0
-min_score = 0.0
-temperature = 0.0
-output_style = "clean"
+def load_agent_config(path: Path = DEFAULT_AGENTS_CONFIG) -> AgentConfig:
+    if not path.exists():
+        raise FileNotFoundError(f"Agent config not found: {path}")
 
-system_prompt = ""
+    with path.open("rb") as file:
+        payload = tomllib.load(file)
 
-route_keywords = []
+    defaults = {str(key): str(value) for key, value in payload.get("defaults", {}).items()}
+    agents: dict[str, Agent] = {}
+
+    for raw in payload.get("agents", []):
+        agent = Agent(
+            id=str(raw["id"]),
+            display_name=str(raw.get("display_name", raw["id"])),
+            description=str(raw.get("description", "")),
+            task=str(raw.get("task", "")),
+            model=str(raw.get("model", "")),
+            datasets=_as_str_list(raw.get("datasets")),
+            allowed_tools=_as_str_list(raw.get("allowed_tools")),
+            can_call=_as_str_list(raw.get("can_call")),
+            fallback_agent=str(raw.get("fallback_agent", "")),
+            max_chunks=int(raw.get("max_chunks", 4)),
+            min_score=float(raw.get("min_score", 0.12)),
+            temperature=float(raw.get("temperature", 0.1)),
+            output_style=str(raw.get("output_style", "concise")),
+            system_prompt=str(raw.get("system_prompt", "")),
+            route_keywords=_as_str_list(raw.get("route_keywords")),
+        )
+
+        if agent.id in agents:
+            raise ValueError(f"Duplicate agent id in config: {agent.id}")
+
+        agents[agent.id] = agent
+
+    if not agents:
+        raise ValueError(f"No agents configured in {path}")
+
+    default_agent = defaults.get("default_agent")
+    if default_agent and default_agent not in agents:
+        raise ValueError(f"Default agent '{default_agent}' does not exist")
+
+    return AgentConfig(defaults=defaults, agents=agents)
