@@ -27,6 +27,13 @@ class Agent:
     system_prompt: str
     route_keywords: list[str]
 
+    # Runtime / orchestration fields.
+    enabled: bool = True
+    max_concurrent_jobs: int = 1
+    cooldown_seconds: int = 0
+    keep_warm: bool = False
+    priority: int = 50
+
 
 @dataclass(frozen=True)
 class AgentConfig:
@@ -51,6 +58,16 @@ def _as_str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         raise ValueError(f"Expected list[str], got {type(value).__name__}")
     return [str(item) for item in value]
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def load_agent_config(path: Path = DEFAULT_AGENTS_CONFIG) -> AgentConfig:
@@ -80,6 +97,12 @@ def load_agent_config(path: Path = DEFAULT_AGENTS_CONFIG) -> AgentConfig:
             output_style=str(raw.get("output_style", "concise")),
             system_prompt=str(raw.get("system_prompt", "")),
             route_keywords=_as_str_list(raw.get("route_keywords")),
+
+            enabled=_as_bool(raw.get("enabled"), default=True),
+            max_concurrent_jobs=int(raw.get("max_concurrent_jobs", 1)),
+            cooldown_seconds=int(raw.get("cooldown_seconds", 0)),
+            keep_warm=_as_bool(raw.get("keep_warm"), default=False),
+            priority=int(raw.get("priority", 50)),
         )
 
         if agent.id in agents:
