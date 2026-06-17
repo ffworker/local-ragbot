@@ -129,11 +129,16 @@ class RagHandler(BaseHTTPRequestHandler):
 <meta charset="utf-8">
 <title>Local RAG Bot</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.4}
-textarea,input{width:100%;box-sizing:border-box}textarea{min-height:90px}button{padding:8px 14px}
-pre{white-space:pre-wrap;background:#f6f6f6;padding:12px}
+body{font-family:system-ui,sans-serif;max-width:860px;margin:40px auto;padding:0 16px;line-height:1.5}
+textarea,input{width:100%;box-sizing:border-box}
+textarea{min-height:100px}
+button{padding:8px 14px;cursor:pointer}
+pre{white-space:pre-wrap;background:#f6f6f6;padding:14px;border-radius:8px;overflow:auto}
+.answer{background:#fff;border:1px solid #ddd}
 small{color:#666}
+details{margin-top:16px}
 </style>
+
 <h1>Local RAG Bot</h1>
 
 <label>Dataset <small>(optional)</small></label>
@@ -150,7 +155,14 @@ small{color:#666}
 <textarea id="q">What is this bot allowed to answer?</textarea><br>
 
 <button onclick="ask()">Ask</button>
-<pre id="out"></pre>
+
+<h2>Answer</h2>
+<pre id="answer" class="answer"></pre>
+
+<details>
+  <summary>Debug JSON</summary>
+  <pre id="debug"></pre>
+</details>
 
 <script>
 async function ask(){
@@ -168,7 +180,10 @@ async function ask(){
     body:JSON.stringify(payload)
   });
 
-  document.getElementById('out').textContent = JSON.stringify(await res.json(), null, 2);
+  const data = await res.json();
+
+  document.getElementById('answer').textContent = data.answer || '';
+  document.getElementById('debug').textContent = JSON.stringify(data, null, 2);
 }
 </script>"""
         data = html.encode("utf-8")
